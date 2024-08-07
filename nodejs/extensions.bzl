@@ -1,6 +1,18 @@
 "extensions for bzlmod"
 
-load(":repositories.bzl", "DEFAULT_NODE_REPOSITORY", "DEFAULT_NODE_VERSION", "nodejs_register_toolchains")
+load(
+    ":repositories.bzl",
+    "DEFAULT_NODE_REPOSITORY",
+    "DEFAULT_NODE_URL",
+    "DEFAULT_NODE_VERSION",
+    "nodejs_register_toolchains",
+)
+
+def _toolchain_info(toolchain):
+    return {attr: getattr(toolchain, attr) for attr in _ATTRS}
+
+def _toolchain_repr(toolchain_info):
+    return ", ".join(["%s = %r" % (attr, value) for attr, value in toolchain_info.items() if value])
 
 def _toolchain_extension(module_ctx):
     registrations = {}
@@ -14,54 +26,65 @@ def _toolchain_extension(module_ctx):
                     # Prioritize the root-most registration of the default node toolchain version and
                     # ignore any further registrations (modules are processed breadth-first)
                     continue
-                if toolchain.node_version == registrations[toolchain.name].node_version and toolchain.node_version_from_nvmrc == registrations[toolchain.name].node_version_from_nvmrc:
+                toolchain_info = _toolchain_info(toolchain)
+                registered_toolchain_info = _toolchain_info(registrations[toolchain.name])
+                if toolchain_info != registered_toolchain_info:
+                    fail("Multiple conflicting toolchains declared:\n* {}\n* {}".format(
+                        _toolchain_repr(toolchain_info),
+                        _toolchain_repr(registered_toolchain_info),
+                    ))
+                else:
                     # No problem to register a matching toolchain twice
                     continue
-                fail("Multiple conflicting toolchains declared for name {} ({} and {})".format(
-                    toolchain.name,
-                    toolchain.node_version,
-                    registrations[toolchain.name],
-                ))
             else:
-                registrations[toolchain.name] = struct(
-                    node_version = toolchain.node_version,
-                    node_version_from_nvmrc = toolchain.node_version_from_nvmrc,
-                    include_headers = toolchain.include_headers,
-                )
+                registrations[toolchain.name] = toolchain
 
     for k, v in registrations.items():
         nodejs_register_toolchains(
             name = k,
             node_version = v.node_version,
             node_version_from_nvmrc = v.node_version_from_nvmrc,
+            node_urls = v.node_urls,
             include_headers = v.include_headers,
             register = False,
         )
 
-node = module_extension(
-    implementation = _toolchain_extension,
-    tag_classes = {
-        "toolchain": tag_class(attrs = {
-            "name": attr.string(
-                doc = "Base name for generated repositories",
-                default = DEFAULT_NODE_REPOSITORY,
-            ),
-            "node_version": attr.string(
-                doc = "Version of the Node.js interpreter",
-                default = DEFAULT_NODE_VERSION,
-            ),
-            "node_version_from_nvmrc": attr.label(
-                allow_single_file = True,
-                doc = """The .nvmrc file containing the version of Node.js to use.
+_ATTRS = {
+    "name": attr.string(
+        doc = "Base name for generated repositories",
+        default = DEFAULT_NODE_REPOSITORY,
+    ),
+    "node_version": attr.string(
+        doc = "Version of the Node.js interpreter",
+        default = DEFAULT_NODE_VERSION,
+    ),
+    "node_version_from_nvmrc": attr.label(
+        allow_single_file = True,
+        doc = """The .nvmrc file containing the version of Node.js to use.
 
 If set then the version found in the .nvmrc file is used instead of the one specified by node_version.""",
-            ),
-            "include_headers": attr.bool(
-                doc = """Set headers field in NodeInfo provided by this toolchain.
+    ),
+    "include_headers": attr.bool(
+        doc = """Set headers field in NodeInfo provided by this toolchain.
 
 This setting creates a dependency on a c++ toolchain.
 """,
-            ),
-        }),
+    ),
+    "node_urls": attr.string_list(
+        doc = """List of URLs to use to download Node.js.
+
+ Each entry is a template for downloading a node distribution.
+
+ The `{version}` parameter is substituted with the `node_version` attribute,
+ and `{filename}` with the matching entry from the `node_repositories` attribute.
+ """,
+        default = [DEFAULT_NODE_URL],
+    ),
+}
+
+node = module_extension(
+    implementation = _toolchain_extension,
+    tag_classes = {
+        "toolchain": tag_class(attrs = _ATTRS),
     },
 )
